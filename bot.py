@@ -6,10 +6,11 @@
 
 import os
 
-import anthropic
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 import character as character_module
 
@@ -18,16 +19,16 @@ import character as character_module
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-MODEL = "claude-sonnet-4-6"   # 要用的 Claude 模型
-MAX_HISTORY = 20              # 每個頻道最多保留幾則訊息（user + assistant 各算一則）
-MAX_TOKENS = 1024             # 單次回覆的長度上限（token ≈ 字的單位）
+MODEL = "gemini-2.5-flash"   # 要用的 Gemini 模型（免費額度可用，想換可改這裡）
+MAX_HISTORY = 20             # 每個頻道最多保留幾則訊息（user + model 各算一則）
+MAX_TOKENS = 1024            # 單次回覆的長度上限（token ≈ 字的單位）
 
-# AsyncAnthropic 是「非同步」版本的客戶端。
-# discord.py 本身跑在 asyncio 事件迴圈上，如果用同步版會「卡住」整個 bot，
-# 用 Async 版搭配 await，等 API 回應時 bot 還能處理其他事情。
-claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+# genai.Client 是 Google Gemini 的客戶端。
+# 它的 .aio 子物件提供「非同步」版本的方法；discord.py 跑在 asyncio 上，
+# 用 .aio + await 等 API 回應時 bot 不會卡住，還能同時處理其他訊息。
+gemini = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ---------------------------------------------------------------------------
@@ -80,23 +81,26 @@ async def generate_reply(channel_id: int, user_message: str) -> str:
 
     # 取出（或建立）這個頻道的對話歷史
     history = channel_history.setdefault(channel_id, [])
-    # 先把這次的使用者訊息加進歷史
-    history.append({"role": "user", "content": user_message})
+    # Gemini 的訊息格式跟 Claude 不同：
+    #   role 用 "user" / "model"（不是 "assistant"），文字要放在 parts 清單裡
+    history.append({"role": "user", "parts": [{"text": user_message}]})
 
-    # 呼叫 Claude 的 Messages API：
-    #   system   = 角色設定（用 character.py 組好的 prompt）
-    #   messages = 整段對話歷史，Claude 會看著它接話
-    response = await claude.messages.create(
+    # 呼叫 Gemini 的 generate_content：
+    #   contents           = 整段對話歷史，Gemini 看著它接話
+    #   system_instruction = 角色設定（用 character.py 組好的 prompt）
+    response = await gemini.aio.models.generate_content(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=character_module.build_system_prompt(character),
-        messages=history,
+        contents=history,
+        config=types.GenerateContentConfig(
+            system_instruction=character_module.build_system_prompt(character),
+            max_output_tokens=MAX_TOKENS,
+        ),
     )
-    # 回應的文字在 content[0].text
-    reply = response.content[0].text
+    # 回應的文字直接在 response.text
+    reply = response.text
 
-    # 把 AI 的回覆也存進歷史，下一輪對話才有上下文
-    history.append({"role": "assistant", "content": reply})
+    # 把 AI 的回覆也存進歷史，下一輪對話才有上下文（注意 role 是 "model"）
+    history.append({"role": "model", "parts": [{"text": reply}]})
 
     # 只保留最近 MAX_HISTORY 則，避免歷史無限變長（也省 token）
     if len(history) > MAX_HISTORY:
@@ -232,8 +236,8 @@ async def on_message(message: discord.Message):
 def main():
     if not DISCORD_TOKEN:
         raise RuntimeError("找不到 DISCORD_TOKEN，請把 .env.example 複製成 .env 並填入。")
-    if not ANTHROPIC_API_KEY:
-        raise RuntimeError("找不到 ANTHROPIC_API_KEY，請在 .env 裡填入。")
+    if not GEMINI_API_KEY:
+        raise RuntimeError("找不到 GEMINI_API_KEY，請在 .env 裡填入。")
     bot.run(DISCORD_TOKEN)
 
 
