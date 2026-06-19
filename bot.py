@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 
 import character as character_module
+import story as story_module
 import storage
 
 load_dotenv()
@@ -34,6 +35,8 @@ gemini = genai.Client(api_key=GEMINI_API_KEY)
 channel_characters: dict[int, dict[str, dict]] = {}
 # channel_transcript：頻道 id → 對話紀錄，每句是 {"name": 發話者, "text": 內容}
 channel_transcript: dict[int, list[dict]] = {}
+# channel_story：頻道 id → 劇情進度 {"id": 劇情id, "node": 目前節點id}；沒在玩劇情就沒這個 key
+channel_story: dict[int, dict] = {}
 
 
 def save_state(channel_id: int) -> None:
@@ -42,6 +45,7 @@ def save_state(channel_id: int) -> None:
         channel_id,
         list(channel_characters.get(channel_id, {}).keys()),
         channel_transcript.get(channel_id, []),
+        channel_story.get(channel_id),
     )
 
 
@@ -55,6 +59,8 @@ def load_state() -> None:
                 chars[name] = card
         channel_characters[channel_id] = chars
         channel_transcript[channel_id] = saved.get("transcript", [])
+        if saved.get("story"):            # 有劇情進度才存，避免一堆空值
+            channel_story[channel_id] = saved["story"]
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +115,28 @@ async def generate_for_character(channel_id: int, card: dict) -> str:
         contents=[{"role": "user", "parts": [{"text": scene + instruction}]}],
         config=types.GenerateContentConfig(
             system_instruction=character_module.build_system_prompt(card, co_stars),
+            max_output_tokens=MAX_TOKENS,
+        ),
+    )
+    return (response.text or "").strip()
+
+
+async def generate_story_reply(card: dict, player_text: str) -> str:
+    """劇情裡「自由對話」節點專用：玩家打一句話，讓指定角色即時回一句。
+
+    這是整個劇情系統裡唯一會呼叫 LLM 的地方。其餘所有按鈕選項都是
+    讀事先寫好的文字，不碰 API，所以不用擔心 Gemini 限流。
+    """
+    scene = (
+        f"玩家對你說：「{player_text}」\n\n"
+        f"請只以「{card['name']}」的身分自然地回應這句話，"
+        f"長度與風格依你的角色設定而定。只輸出你說的內容，不要加名字前綴。"
+    )
+    response = await gemini.aio.models.generate_content(
+        model=MODEL,
+        contents=[{"role": "user", "parts": [{"text": scene}]}],
+        config=types.GenerateContentConfig(
+            system_instruction=character_module.build_system_prompt(card),
             max_output_tokens=MAX_TOKENS,
         ),
     )
@@ -280,6 +308,170 @@ async def character_create(interaction: discord.Interaction, name: str):
 
 
 bot.tree.add_command(character_group)
+
+
+# ---------------------------------------------------------------------------
+# 劇情模式：事先寫好的分支劇情，按按鈕推進（不呼叫 LLM）
+# 只有節點裡標 free 的選項，按下去才會叫一次 Gemini（自由對話）
+# ---------------------------------------------------------------------------
+def render_node(channel_id: int) -> tuple[str, discord.ui.View | None] | None:
+    """組出目前節點要顯示的文字 + 按鈕。沒在玩劇情或進度壞掉就回 None。"""
+    state = channel_story.get(channel_id)
+    if not state:
+        return None
+    story = story_module.load_story(state["id"])
+    if story is None:
+        return None
+    node = story_module.get_node(story, state["node"])
+    if node is None:
+        return None
+
+    speaker = node.get("speaker")
+    text = node.get("text", "")
+    body = f"**{speaker}**：{text}" if speaker else text
+
+    choices = node.get("choices", [])
+    if not choices:                       # 沒有選項 = 劇情結尾
+        body += "\n\n*（這段劇情結束了。用 /story play 重新開始或換一個。）*"
+        return body, None
+    return body, StoryView(channel_id, choices)
+
+
+class StoryButton(discord.ui.Button):
+    """一個劇情選項按鈕。按下去要嘛跳到下一節點，要嘛開啟自由對話。"""
+
+    def __init__(self, choice: dict):
+        super().__init__(label=choice["label"][:80], style=discord.ButtonStyle.secondary)
+        self.choice = choice
+
+    async def callback(self, interaction: discord.Interaction):
+        channel_id = interaction.channel_id
+        if channel_id not in channel_story:   # bot 重開後舊按鈕會失效
+            await interaction.response.send_message(
+                "這段劇情的按鈕已過期，請用 /story resume 繼續。", ephemeral=True
+            )
+            return
+
+        # free 選項：跳出輸入框，等玩家打字後才呼叫 LLM
+        if self.choice.get("free"):
+            await interaction.response.send_modal(FreeTalkModal(self.choice))
+            return
+
+        # 一般選項：純跳節點，完全不碰 LLM，瞬間完成
+        channel_story[channel_id]["node"] = self.choice["goto"]
+        save_state(channel_id)
+        rendered = render_node(channel_id)
+        if rendered is None:
+            await interaction.response.edit_message(content="（劇情資料有誤）", view=None)
+            return
+        body, view = rendered
+        await interaction.response.edit_message(content=body, view=view)
+
+
+class StoryView(discord.ui.View):
+    """一個節點的所有按鈕。timeout 設 15 分鐘；過期後用 /story resume 重新叫出來。"""
+
+    def __init__(self, channel_id: int, choices: list[dict]):
+        super().__init__(timeout=900)
+        self.channel_id = channel_id
+        for choice in choices:
+            self.add_item(StoryButton(choice))
+
+
+class FreeTalkModal(discord.ui.Modal, title="自由對話"):
+    """free 選項按下去跳出的輸入框。送出後呼叫一次 LLM，讓指定角色即時回應。"""
+
+    message = discord.ui.TextInput(
+        label="你想說什麼？", style=discord.TextStyle.paragraph, max_length=300
+    )
+
+    def __init__(self, choice: dict):
+        super().__init__()
+        self.choice = choice
+
+    async def on_submit(self, interaction: discord.Interaction):
+        channel_id = interaction.channel_id
+        card = character_module.load_character(self.choice.get("character", ""))
+        if card is None:
+            await interaction.response.send_message(
+                "這個自由對話指定的角色卡不存在。", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()    # 先回應互動，爭取 API 的時間
+        try:
+            reply = await generate_story_reply(card, self.message.value)
+        except Exception as e:
+            print(f"[Gemini API 錯誤] {e}")
+            reply = "（對方愣了一下，似乎沒聽清楚……系統忙線，請稍後再試。）"
+        await interaction.followup.send(
+            f"**你**：{self.message.value}\n**{card['name']}**：{reply}"
+        )
+
+        # 對話結束後，回到這個選項指定的節點（通常是回原處繼續玩）
+        goto = self.choice.get("goto")
+        if goto:
+            channel_story[channel_id]["node"] = goto
+            save_state(channel_id)
+        rendered = render_node(channel_id)
+        if rendered is not None:
+            body, view = rendered
+            await interaction.followup.send(body, view=view)
+
+
+story_group = app_commands.Group(name="story", description="劇情模式（按按鈕玩，不吃 AI 額度）")
+
+
+@story_group.command(name="list", description="列出所有可玩的劇情")
+async def story_list(interaction: discord.Interaction):
+    stories = story_module.list_stories()
+    if not stories:
+        await interaction.response.send_message("stories/ 資料夾裡目前沒有任何劇情。")
+        return
+    listed = "\n".join(f"- `{sid}`　{title}" for sid, title in stories)
+    await interaction.response.send_message(f"可玩的劇情：\n{listed}\n\n用 `/story play [id]` 開始。")
+
+
+@story_group.command(name="play", description="開始一段劇情（會從頭開始）")
+@app_commands.describe(story_id="劇情 id（用 /story list 查）")
+async def story_play(interaction: discord.Interaction, story_id: str):
+    story = story_module.load_story(story_id)
+    if story is None:
+        await interaction.response.send_message(f"找不到劇情 `{story_id}`，用 /story list 查看。")
+        return
+    channel_id = interaction.channel_id
+    channel_story[channel_id] = {"id": story_id, "node": story.get("start", "")}
+    rendered = render_node(channel_id)
+    if rendered is None:                   # 起始節點寫錯之類的
+        channel_story.pop(channel_id, None)
+        await interaction.response.send_message(f"劇情 `{story_id}` 的起始節點有誤，無法開始。")
+        return
+    save_state(channel_id)
+    body, view = rendered
+    await interaction.response.send_message(body, view=view)
+
+
+@story_group.command(name="resume", description="重新叫出目前的劇情畫面（按鈕過期或重開後用）")
+async def story_resume(interaction: discord.Interaction):
+    rendered = render_node(interaction.channel_id)
+    if rendered is None:
+        await interaction.response.send_message("這個頻道沒有進行中的劇情。用 /story play 開始一個。")
+        return
+    body, view = rendered
+    await interaction.response.send_message(body, view=view)
+
+
+@story_group.command(name="quit", description="結束目前的劇情")
+async def story_quit(interaction: discord.Interaction):
+    channel_id = interaction.channel_id
+    if channel_story.pop(channel_id, None) is None:
+        await interaction.response.send_message("目前沒有在玩劇情。")
+        return
+    save_state(channel_id)
+    await interaction.response.send_message("已結束劇情。")
+
+
+bot.tree.add_command(story_group)
 
 
 # ---------------------------------------------------------------------------

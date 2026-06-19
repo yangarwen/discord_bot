@@ -14,11 +14,21 @@ from pathlib import Path
 DATA_DIR = Path(__file__).parent / "data"
 
 
-def save_channel(channel_id: int, character_names: list[str], transcript: list[dict]) -> None:
-    """把單一頻道的狀態寫進 data/{channel_id}.json。"""
+def save_channel(
+    channel_id: int,
+    character_names: list[str],
+    transcript: list[dict],
+    story: dict | None = None,
+) -> None:
+    """把單一頻道的狀態寫進 data/{channel_id}.json。
+
+    story：劇情進度 {"id": 劇情id, "node": 目前節點id}，沒在玩劇情時是 None。
+    """
     DATA_DIR.mkdir(exist_ok=True)
     path = DATA_DIR / f"{channel_id}.json"
     payload = {"characters": character_names, "transcript": transcript}
+    if story:
+        payload["story"] = story          # 只有正在玩劇情才寫這個欄位
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 

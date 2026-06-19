@@ -1,0 +1,68 @@
+{
+  "title": "旅館的夜晚",
+  "start": "start",
+  "nodes": {
+    "start": {
+      "speaker": "旁白",
+      "text": "夜色已深，你推開 Aldric 旅館的木門。爐火劈啪作響，角落傳來吟遊詩人的歌聲。你想先去哪？",
+      "choices": [
+        {"label": "走向吧台找老闆 Aldric", "goto": "bar"},
+        {"label": "坐到角落聽 Bryn 唱歌", "goto": "bryn"}
+      ]
+    },
+    "bar": {
+      "speaker": "Aldric",
+      "text": "「哈，又一個趕夜路的。」矮人老闆擦著酒杯抬眼看你，「要房間還是要消息？醜話說在前頭，這兩樣都不便宜。」",
+      "choices": [
+        {"label": "問有沒有空房", "goto": "room"},
+        {"label": "打聽鎮上的消息", "goto": "news"},
+        {"label": "算了，去找詩人", "goto": "bryn"}
+      ]
+    },
+    "room": {
+      "speaker": "Aldric",
+      "text": "「樓上最後一間，銅板五枚，先付。」他把鑰匙拍在吧台上，「別吵到隔壁，那位客人脾氣比我還差。」",
+      "choices": [
+        {"label": "付錢拿鑰匙，回大廳看看", "goto": "start"}
+      ]
+    },
+    "news": {
+      "speaker": "Aldric",
+      "text": "Aldric 壓低聲音：「北邊森林這陣子不乾淨，商隊接連失蹤。官府裝沒事，但聰明人最近都不走那條路。」",
+      "choices": [
+        {"label": "這事得問問見多識廣的 Bryn", "goto": "bryn"},
+        {"label": "回大廳", "goto": "start"}
+      ]
+    },
+    "bryn": {
+      "speaker": "Bryn",
+      "text": "Bryn 撥了個尾音，笑著拍拍身旁的長椅：「來啦旅人！坐坐坐——想聽個故事，還是有話想問我？」",
+      "choices": [
+        {"label": "請他講一個傳說", "goto": "legend"},
+        {"label": "自己開口跟他聊（自由對話）", "free": true, "character": "bryn", "goto": "bryn"},
+        {"label": "起身離開旅館", "goto": "leave"}
+      ]
+    },
+    "legend": {
+      "speaker": "Bryn",
+      "text": "「那我說個『沉睡之鐘』吧。」他清清嗓子——\n\n相傳北邊森林深處，有座無人敲響的古鐘。傳說只要鐘聲響起，森林裡所有迷路的靈魂都能找到回家的路。可從沒有人能走到鐘前，因為越靠近，鐘就把人最思念的人影投在霧裡，引著你一步步偏離。\n「所以啊——」Bryn 眨眨眼，「商隊不是失蹤，是被自己最想見的人領走了。」",
+      "choices": [
+        {"label": "再聽一個別的", "goto": "legend2"},
+        {"label": "問他這故事是不是真的（自由對話）", "free": true, "character": "bryn", "goto": "bryn"},
+        {"label": "謝謝他，回去", "goto": "bryn"}
+      ]
+    },
+    "legend2": {
+      "speaker": "Bryn",
+      "text": "「換個輕鬆的。」他笑開了——\n\n從前有個吝嗇的麵包師，連自己影子都捨不得分人。有天他烤出一條會說話的麵包，麵包開口第一句就是：『老闆，你聞起來比我還香，是不是偷藏了奶油？』從此全鎮的人天天上門，就為了聽那條麵包吐槽他。\n「你看，」Bryn 攤手，「會說話的，到哪都餓不死——像我這樣。」",
+      "choices": [
+        {"label": "回去跟 Bryn 繼續聊", "goto": "bryn"}
+      ]
+    },
+    "leave": {
+      "speaker": "旁白",
+      "text": "你向眾人道別，推門走進夜色。爐火與歌聲被關在身後，但旅館的門，永遠為你留著。\n\n（這一夜的故事告一段落。）",
+      "choices": []
+    }
+  }
+}
