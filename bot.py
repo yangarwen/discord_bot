@@ -22,7 +22,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 MODEL = "gemini-2.5-flash"   # 要用的 Gemini 模型（免費額度可用）
 MAX_HISTORY = 30             # 對話紀錄最多保留幾句（含玩家與所有角色）
-MAX_TOKENS = 1024            # 單次回覆的長度上限
+MAX_TOKENS = 2048            # 單次回覆的長度上限（夠講一段完整故事）
 
 gemini = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -99,8 +99,9 @@ async def generate_for_character(channel_id: int, card: dict) -> str:
     # 把每句整理成「發話者：內容」，串成完整劇本
     scene = "\n".join(f"{line['name']}：{line['text']}" for line in transcript)
     instruction = (
-        f"\n\n以上是目前的對話。請只以「{card['name']}」的身分，"
-        f"自然地接著說一句話。只輸出你這個角色說的內容，不要加上名字前綴。"
+        f"\n\n以上是目前的對話。請只以「{card['name']}」的身分自然地接話，"
+        f"回應的長度與風格依你的角色設定而定（被要求講故事或唱歌時就完整說出來）。"
+        f"只輸出你這個角色說的內容，不要加上名字前綴。"
     )
 
     response = await gemini.aio.models.generate_content(
