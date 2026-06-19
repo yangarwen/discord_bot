@@ -1,0 +1,3 @@
+# Windows 批次檔必須使用 CRLF 換行，否則 cmd.exe 會解析失敗（雙擊一閃就關）
+*.bat text eol=crlf
+*.cmd text eol=crlf
