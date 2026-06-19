@@ -15,6 +15,9 @@ dist/
 *.egg-info/
 .eggs/
 
+# Per-channel conversation saves (private)
+data/
+
 # Logs
 *.log
 
