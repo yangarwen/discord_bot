@@ -284,7 +284,7 @@ bot.tree.add_command(character_group)
 # ---------------------------------------------------------------------------
 # /chat 指令
 # ---------------------------------------------------------------------------
-@bot.tree.command(name="chat", description="和此頻道的角色說話")
+@bot.tree.command(name="chat", description="和此頻道的角色說話（其實直接打字就會回，這個是備用）")
 @app_commands.describe(message="你想說的話")
 async def chat(interaction: discord.Interaction, message: str):
     channel_id = interaction.channel_id
@@ -292,30 +292,39 @@ async def chat(interaction: discord.Interaction, message: str):
         await interaction.response.send_message("請先用 /character set [name] 設定角色")
         return
 
-    # 多角色各呼叫一次 API 會花好幾秒，先 defer 避免逾時。
-    await interaction.response.defer()
-    # interaction.followup.send 可以連續送多則，正好給多個角色各送一則。
     author = interaction.user.display_name
+    # 先把玩家的話「顯示」出來，否則 /chat 的輸入只有自己看得到。
+    # 這同時也立刻回應了互動，不會卡到 3 秒逾時。
+    await interaction.response.send_message(f"**{author}**：{message}")
+    # 之後每個角色的回覆用 followup 連續送出。
     await run_conversation(channel_id, author, message, interaction.followup.send)
 
 
 # ---------------------------------------------------------------------------
-# @bot 觸發
+# 一般訊息觸發：只要這個頻道設了角色，直接打字就會觸發（不必 /chat 也不必 @）
 # ---------------------------------------------------------------------------
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author == bot.user:      # 忽略自己，避免無限對話
-        return
-    if bot.user not in message.mentions:    # 只在被 @ 時反應
+    # 忽略所有機器人（包含自己），避免互相無限對話
+    if message.author.bot:
         return
 
     channel_id = message.channel.id
+    mentioned = bot.user in message.mentions
+    # 訊息文字；若有 @我，把那段 mention 標記去掉
+    content = message.content
+    if mentioned:
+        content = content.replace(f"<@{bot.user.id}>", "").strip()
+
+    # 這個頻道還沒設角色：
+    #   被 @ 才提示一下；一般閒聊不出聲，免得在非扮演頻道一直插話
     if not channel_characters.get(channel_id):
-        await message.channel.send("請先用 /character set [name] 設定角色")
+        if mentioned:
+            await message.channel.send("請先用 /character set [name] 設定角色")
         return
 
-    content = message.content.replace(f"<@{bot.user.id}>", "").strip()
-    if not content:
+    # 以 // 開頭的訊息當成「出戲聊天(OOC)」，bot 不回應，方便你私下討論
+    if content.startswith("//") or not content.strip():
         return
 
     author = message.author.display_name
